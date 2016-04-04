@@ -1,0 +1,501 @@
+---
+title: "Parvo ICU Volunteer Workforce"
+author: "Hunter Ratliff, @HunterRatliff1"
+date: "March 13, 2016"
+output: 
+  html_document:
+    theme: united
+    highlight: zenburn
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+This analysis utilizes data from the *Parvo ICU End of Shift Report* submitted at the end of each shift. It has not been cross-validated against independent (and official) data sources like PetPoint of MyVolunteerPage, and therefore might contain some erroneous data points.
+
+```{r, include=FALSE}
+require(dplyr)
+require(tidyr)
+require(lubridate)
+require(broom)
+
+require(ggplot2)
+require(ggthemes)
+require(scales)
+require(ggrepel)
+
+knitr::opts_chunk$set(fig.path='EndOfShift/', #fig.width=12, fig.height=8, 
+                      echo=FALSE, warning=FALSE, message=FALSE, collapse=T, 
+                      fig.align='center')
+# Numbers <- readRDS("Datasets/Numbers.RDS") %>%
+#   mutate(
+#     Dogs  = Dogs.Crt + Dogs.Int + Dogs.Wel,
+#     yr    = year(Date),
+#     yrday = yday(Date),
+#     m     = month(Date)) 
+# 
+# 
+# Numbers.melt <- readRDS("Datasets/Numbers_melt.RDS")
+Inventory <- readRDS("Datasets/Inventory.RDS")
+Numerical <- readRDS("Datasets/Numerical.RDS")
+Names <- readRDS("Datasets/Names.RDS")
+Other <- readRDS("Datasets/Other.RDS")
+```
+
+Using data submitted at the end of shifts via the *Parvo ICU End of Shift Report*, 
+this analysis explores from the trends and patterns in the Parvo ICU over 
+multiple years. Data spans from `r floor_date(min(Numerical$Timestamp), "day")` 
+to `r floor_date(max(Numerical$Timestamp), "day")` and represents `r nrow(Numerical)` 
+total observations (e.g. End of Shift submissions).
+
+# Volunteers 
+
+First, we'll take a look at the volunteers and staff who were listed as a 
+response to the **Shift Staff/Volunteers** question on the report. Responses have
+been modified to fix misspellings and standardize the format. 
+
+```{r define_Vols.df}
+Vols <- Numerical %>%
+  select(Timestamp, Shift.Time) %>% # Grab the time and duration of shift
+  bind_cols(Names$Vols) %>%         # Bind the table of volunteer attendence
+  
+  # Gather the table in long format by volunteer name
+  gather(Volunteer, Value, -Timestamp, -Shift.Time) %>%
+  filter(Value) %>%                 # Filter dates where vol wasn't there
+  
+  # Only vols with 10+ shifts
+  group_by(Volunteer) %>% filter(9<n())
+```
+
+Responses lists names as a comma separated list, like the one below. The method
+of parsing names is fairly indiscreet, and identified a total of 
+`r ncol(Names$Vols)` unique names across all submissions. For the sake of 
+simplicity, only names appearing 10 or more times have been counted. By applying
+this filter, the number of names counted was reduced to 
+`r nrow(count(Vols, Volunteer))`.
+
+Additional complications arose from volunteers sharing the same first name. 
+Sometimes submissions will specify which volunteer was present by including their
+last initial, but often this information is omitted. Therefore, there is a great
+deal of cross over among a few volunteers with common names, but unfortunatly 
+this is unavoidable. 
+
+In cases where a volunteer/staff was listed as training a new volunteer (e.g. 
+Katie training Hunter), both the trainer and trainee have been counted. 
+
+> *Volunteer*, *Volunteer*, ...   
+> *Volunteer*, *Trainer* training *Trainee*
+
+
+To begin, here's a table of the top 25 volunteers, sorted by the number of 
+shifts for which they've been present:
+
+```{r}
+Vols %>% count(Volunteer, sort=T) %>% slice(1:25) %>% knitr::kable()
+```
+
+## Heatmaps
+
+<h3> Who volunteers together </h3>
+
+Below is a correlation matrix represented as a heatmap. The values (colors of 
+the blocks) the correlation co-efficient of the number of shifts worked per week
+by using the *pearson* method. Higher values represent an increased likelihood
+that those two volunteers volunteered during the same week. 
+
+```{r}
+df <- Vols %>%
+  group_by(Volunteer, Week=floor_date(Timestamp, "week")) %>%
+  summarise(Shifts = n()) %>%
+  spread(Volunteer, Shifts, fill = 0) 
+
+row.names(df) <- df$Week
+df$Week <- NULL
+cor(df) %>% d3heatmap::d3heatmap()
+rm(df)
+```
+
+The numerical value is probably of little practical signifigance, but the 
+general clustering (represented by "chunks" of similar colors, or by the 
+dendograms on either side of the plot) do help to highlight different clusters 
+of volunteers. 
+
+<h3> Who volunteers by day of the week and AM/PM </h3>
+
+Next, we'll look at another heatmap. This time, however, the numerical values 
+are indicative of the number of shifts that each volunteer has been present for
+at each time of the day/week. 
+
+```{r}
+df <- Vols %>%
+  filter(Volunteer!="Katie") %>%
+  group_by(Volunteer, wkday=paste(wday(Timestamp, label = T), 
+                                  ifelse(am(Timestamp), "AM", "PM"))) %>%
+  summarise(Shifts = n()) %>%
+  filter(10<sum(Shifts)) %>%
+  spread(Volunteer, Shifts, fill = 0) 
+
+row.names(df) <- df$wkday
+df$wkday <- NULL
+t(df) %>% d3heatmap::d3heatmap(scale="row")
+rm(df)
+```
+
+This figure is colored relative to each volunteer (i.e. by row), so it 
+highlights what days/time each volunteer prefers. The most useful conclusion we
+may derive here is the noticable lack of crossover between AM and PM volunteers.
+
+--------------------------------------------------------------------------------
+
+## Violin/Boxplots
+
+<h3> Engagement Over Time </h3>
+
+This figure demonstrates the patterns of shifts by each volunteer (with more 
+than 10 shifts total) over the duration of thier time as a Parvo volunteer/staff
+
+```{r, fig.height=8}
+Vols %>% 
+  group_by(Volunteer) %>%
+  mutate(First = min(Timestamp)) %>%
+  ggplot(aes(x=reorder(factor(Volunteer), First), y=Timestamp)) + 
+  geom_violin() +
+  geom_point(aes(color=Shift.Time), alpha=0.5) + 
+  
+  scale_color_continuous_tableau(name="Shift Duration") +
+  theme_fivethirtyeight() + theme(axis.title = element_text()) +
+  scale_y_datetime(date_labels = "%b %y", date_breaks="3 months") +
+  labs(x="Volunteer/Staff", y="", title="Volunteer/Staff Activity Over Time",
+       subtitle="For Volunteers/Staff with 10+ Shifts") +
+  coord_flip()
+```
+
+Each point represents one shift (colored by how long the shift lasted). Compared
+to other [volunteer oppurtunites](http://goo.gl/vqraBD) at Austin Pets Alive!, 
+Parvo actually has a very [high reternion rate](http://goo.gl/wMQVcs), 
+especially among those who have been here for over a year.
+
+<h3> Monthly Engagement </h3>
+
+Another way to conceptualize this might be to look at the number of 
+
+```{r, fig.height=8}
+df <- Vols %>% 
+  filter(Volunteer!="Katie") %>%
+  group_by(Volunteer, Month=floor_date(Timestamp, "month")) %>%
+  summarise(Shifts=n(), Shift.Time=sum(Shift.Time)) %>%
+  filter(Shifts>0) %>%
+  group_by(Volunteer) 
+
+gridExtra::grid.arrange(
+  {df %>%
+  summarise(Shift.Time=sum(Shift.Time), Months=n(), Shifts=sum(Shifts)) %>%
+  ggplot(aes(x=Months, y=Shifts)) + 
+  geom_point(aes(size=Shift.Time), alpha=0.3) +
+  geom_point() +
+  theme_fivethirtyeight() + theme(axis.title = element_text()) +
+  labs(x="Months Active", y="Number of Shifts", 
+       title="Number of Shifts by Months Active")},
+  {df %>%
+  mutate(Shift.Time=sum(Shift.Time), Months=n()) %>%
+  ggplot(aes(x=reorder(Volunteer, Shift.Time), y=Shifts)) + 
+  geom_boxplot(aes(fill=Shift.Time), alpha=0.7) +
+  
+  scale_fill_continuous_tableau(name="Total Hours") +
+  theme_fivethirtyeight() + theme(axis.title = element_text()) +
+  labs(x="Volunteer/Staff", y="Shifts Per Month", title="Shifts Per Month by Volunteer",
+       subtitle="For Volunteers/Staff with 10+ Shifts") +
+  coord_flip()},
+  ncol=2)
+rm(df)  
+
+
+```
+
+
+
+## Rolling Hours by days since start
+
+```{r}
+Vols %>% 
+  group_by(Volunteer) %>%
+  mutate(
+    Hours = order_by(Timestamp, cumsum(Shift.Time)),
+    # Start = floor_date(min(Timestamp), "day"),
+    ddif = as.numeric(as.duration(interval(floor_date(min(Timestamp), "day"), floor_date(Timestamp, "day")))/86400),
+    Len  = max(ddif)) %>%
+  filter(Volunteer!="Katie") %>%
+  ggplot(aes(x=ddif, y=Hours, group=Volunteer)) + geom_line(aes(color=Len)) + 
+  labs(x="Days since start")
+```
+
+```{r}
+Vols %>% 
+  group_by(Volunteer, Week=floor_date(Timestamp, "week")) %>%
+  summarise(Shifts=n(), Shift.Time=sum(Shift.Time)) %>%
+  filter(Shifts>0) %>% 
+  group_by(Month=floor_date(Week, "month")) %>% mutate(nVols.m = n_distinct(Volunteer)) %>%
+  group_by(Week, Month, nVols.m) %>% summarise(
+    nVols.wk = n_distinct(Volunteer),
+    Shift.Time = mean(Shift.Time)) %>%
+  filter(Week<ymd("2016-03-27")) %>%
+  # View()
+  ggplot() + geom_point(aes(x=Week, y=nVols.wk, size=Shift.Time), alpha=0.5) +
+  
+  geom_smooth(aes(x=Week, y=nVols.wk), color="red") +
+  theme_fivethirtyeight() + theme(axis.title = element_text()) +
+  scale_x_datetime(date_labels = "%b %y", date_breaks="3 months") +
+  labs(x="", y="Unique Volunteers", title="Unique Volunteers Per Week")
+```
+# How About The Dogs?
+
+First, we'll run an unadjusted linear model based on the number of dogs at each level that are in the ICU 
+
+```{r, echo=FALSE, fig.width=9}
+Dogs <- tbl_df(Numerical) %>%
+  mutate(
+    Date = floor_date(Timestamp-hours(3), "day"),
+    AM   = am(Timestamp-hours(ceiling(Shift.Time)))) %>%
+  select(Date, AM, Duration=Shift.Time, Vols=Count_Vols, Total=Dogs.in.ICU,
+         Critical=Count_Crt, Intermediate=Count_Int, Well=Count_Wel, Timestamp) %>%
+  mutate(AM = ifelse(AM, "AM", "PM")) %>%
+  gather(Level, Dogs, Critical:Well) 
+```
+
+```{r, echo=FALSE, fig.width=9, fig.height=8}
+Dogs %>%     
+  ggplot(aes(x=Date, y=Dogs, color=Level)) +
+  geom_jitter(alpha=0.1) + geom_smooth(linetype=2) + 
+  scale_color_brewer(palette = "Set1") + 
+  theme_fivethirtyeight() + theme(
+    axis.title         = element_text(),
+    panel.grid.minor   = element_line(color="#e6e6e6"), 
+    panel.grid.minor.y = element_blank()) +
+  scale_x_datetime(date_labels = "%b %y", date_breaks="3 months", date_minor_breaks="1 month") +
+  labs(x="", title="Number of Dogs Over Time (By Level)") 
+```
+
+It's difficult to extrapolate the seasonal trends based on two springs, but if we assume that
+this sinusoidal pattern were to continue, we should expect a huge peak this summer, since March
+is only the beginning of the upswing for Parvo season.
+
+```{r, echo=FALSE, fig.width=9, fig.height=8}
+df <- Dogs %>% 
+  group_by(Level, Month=floor_date(Date, "month")) %>% 
+  summarise(Avg=mean(as.numeric(Dogs))) 
+Dogs %>%     
+  ggplot(aes(x=Date, y=Dogs, color=Level)) +
+  geom_jitter(alpha=0.1) +
+  geom_line(aes(color=Level, x=Month, y=Avg), alpha=0.9, data=df) +
+  geom_label(aes(color=Level, label=round(Avg, 1), x=Month, y=Avg), data=df, size=2.2) +
+  scale_color_brewer(palette = "Set1") + 
+  theme_fivethirtyeight() + theme(
+    axis.title         = element_text(),
+    panel.grid.minor   = element_line(color="#e6e6e6"), 
+    panel.grid.minor.y = element_blank()) +
+  scale_x_datetime(date_labels = "%b %y", date_breaks="3 months", date_minor_breaks="1 month") +
+  labs(x="", title="Number of Dogs Over Time (By Level)", subtitle="With Monthly Averages Labeled") 
+```
+
+But obviously, there's a whole lot of variance from the mean
+
+```{r, fig.width=10}
+Dogs %>% 
+  group_by(Level, m=floor_date(Date, "month")) %>% 
+  group_by(Level) %>% mutate(
+    Year = year(m),
+    Month = month(m, label=T)) %>%
+  ggplot((aes(x=Month, y=Dogs, fill=Level))) + geom_boxplot() +
+  theme_fivethirtyeight() + theme(
+    axis.title         = element_text(),
+    panel.grid.minor   = element_line(color="#e6e6e6"), 
+    panel.grid.minor.y = element_blank(),
+    strip.background  = element_rect(fill="#e3e3e3")) +
+  facet_grid(Year~Level)
+```
+
+```{r}
+Dogs %>% 
+  group_by(Level, Month=floor_date(Date, "month")) %>% 
+  summarise(Avg=mean(as.numeric(Dogs))) %>%
+  group_by(Month) %>% mutate(Avg.Total = sum(Avg)) %>%
+  group_by(Level) %>% mutate(
+    Year = year(Month),
+    Month = month(Month, label=T),
+    Avg = round(Avg, 2),
+    Avg.Total = round(Avg.Total, 2)) %>%
+  ggplot(aes(x=factor(Year), y=Month, label=Avg, fill=Avg.Total, alpha=Avg)) + 
+  geom_bin2d() + geom_text(aes(size=Avg), color="black", alpha=1) +
+  coord_flip() + facet_wrap("Level", ncol=1) +
+  scale_fill_distiller(palette = "BrBG", name="Total In ICU") +
+  guides(size=F, alpha=F) + theme_fivethirtyeight() +
+  theme(panel.grid=element_blank(), strip.background  = element_rect(fill="#e3e3e3"))+
+  labs(y="", x="", title="Average Number of Dogs by Level (Monthly)",
+       subtitle="The size of the numbers & transperancy of the bin is proportional to the level's number")
+```
+
+
+
+# Inventory/Supplies
+
+Create a data.frame of all the Inventory requests
+
+```{r}
+Supplies <- Inventory %>%
+  select(Timestamp) %>% 
+  bind_cols(Inventory$Invn.Supplies) %>% select(-`NA`, -None) %>%
+  bind_cols(Inventory$Invn.Medications) %>% select(-`NA`, -None) %>%
+  bind_cols(Inventory$Invn.MedSupplies) %>% select(-`NA`, -None) %>%
+  gather(Supply, Value, -Timestamp) %>%
+  filter(!is.na(Value)) %>%
+  filter(Value) 
+```
+
+Tracking the request over time
+
+```{r, fig.height=8, fig.width=10}
+df <- Supplies %>%
+      group_by(Supply, Week=floor_date(Timestamp, "week")) %>%
+      summarise(Requests.Week = n()) %>% spread(Supply, Requests.Week, fill = 0) 
+
+row.names(df) <- df$Week
+df$Week <- NULL
+# as.matrix(df) %>% t() %>% fpc::pamk() %>% plot()
+# 
+# # By columns, bootstraps to find good p-value
+# require(pvclust)
+# pv <- df %>% scale(center=T, scale=F) %>% pvclust(method.hclust="ward.D", method.dist="euclidean") 
+# pv %>% plot() # dendogram with p values
+# pv %>% pvrect(alpha=0.95) # add rectangles around groups highly supported by the data
+
+
+Numerical %>% 
+  # Group by the time sent minus 3 hours b/c timestamp may be @ 1:00 AM
+  group_by(Date = floor_date(Timestamp-hours(3), "day")) %>%
+  summarise(Dogs = mean(Dogs.in.ICU)) %>%
+  group_by(Week=floor_date(Date, "week")) %>%
+  summarise(Dog.Days = sum(Dogs)) %>%
+  left_join(
+    Supplies %>%
+      group_by(Supply, Week=floor_date(Timestamp, "week")) %>%
+      summarise(Requests.Week = n())
+  ) %>%
+  # ggplot(aes(x=Requests.Week, y=Dog.Days)) + geom_jitter() + facet_wrap("Supply")
+  ggplot(aes(x=Week, y=Supply)) + 
+  geom_rug(sides = "b", aes(alpha=Dog.Days, color=Dog.Days/7), size=2) +
+  geom_tile(aes(fill=Requests.Week)) + 
+  scale_x_datetime(date_labels = "%b %y", date_breaks="2 months") +
+  scale_fill_continuous_tableau(name="Requests Per Week") + 
+  scale_color_gradient2(name="Dogs In ICU") + 
+  guides(alpha=F) + theme_fivethirtyeight() +
+  labs(title="Weekly Inventory Requests Over Time",
+       subtitle="P.S. We need more Turkey & Chicken Sticks")
+
+Supplies %>% count(Supply, sort=T)
+```
+
+A pretty uneventful correlation matrix visualized as a heatmap
+
+```{r}
+df <- Supplies %>% group_by(Supply, Week=floor_date(Timestamp, "week")) %>%
+  summarise(Count = n()) %>%
+  spread(Supply, Count, fill = 0) 
+row.names(df) <- df$Week
+df$Week <- NULL
+df <- cor(df) 
+df[df<0] <- 0
+df %>% d3heatmap::d3heatmap()
+rm(df)
+```
+
+
+
+```{r, eval=FALSE}
+Numbers %>%
+  ggplot(aes(x=yrday, y=Durt.Shft*Vols.Num)) + 
+  geom_jitter(aes(color=Durt.Shft)) +
+  geom_smooth() +
+  scale_color_continuous_tableau(name="Shift Duration") +
+  theme_fivethirtyeight() + theme(axis.title = element_text()) +
+  # scale_x_datetime(date_labels = "%b %y", date_breaks="3 months") +
+  labs(x="Day of Year", y="Volunteer Hours") + facet_wrap("yr", ncol=1)
+
+
+Numbers %>% 
+  filter(Vols.Num<=5) %>%
+  mutate(m = month(Date, label = T, abbr = T)) %>%
+  ggplot(aes(x=Durt.Shft, y=Dogs)) + 
+  geom_jitter(aes(color=factor(Vols.Num)), alpha=0.6) +
+  
+  facet_grid(m~yr) + xlim(c(0,6)) +
+  scale_color_brewer(palette="Spectral", name="Volunteers") +
+  theme_dark() + 
+  
+  labs(x="Shift Duration (hours)", y="Number of Dogs",
+       title="Dogs in Parvo Ward -vs- Duration of Shift",
+       subtitle="Colored by number of volunteers & faceted by month")
+
+
+Numbers %>% 
+  filter(Vols.Num<=5) %>%
+  mutate(m = month(Date, label = T, abbr = T)) %>%
+  ggplot(aes(x=Durt.Shft, fill=factor(yr))) + 
+  geom_density(alpha=0.4) +
+  
+  facet_grid(m~Vols.Num) + xlim(c(0,6)) +
+  scale_fill_brewer(palette="Spectral", name="Volunteers") +
+  theme_dark() + 
+  
+  labs(x="Shift Duration (hours)", y="Number of Dogs",
+       title="Dogs in Parvo Ward -vs- Duration of Shift",
+       subtitle="Colored by number of volunteers & faceted by month")
+```
+
+```{r}
+df <- Numerical %>%
+  mutate(
+    Date = floor_date(Timestamp-hours(3), "day"),
+    AM   = am(Timestamp-hours(ceiling(Shift.Time)))) %>%
+  select(Date, AM, Duration=Shift.Time, Vols=Count_Vols, Total=Dogs.in.ICU,
+         Critical=Count_Crt, Intermediate=Count_Int, Well=Count_Wel, Timestamp) %>%
+  mutate(
+    Time = ifelse(AM, "AM", "PM"),
+    Reported  = Duration*60,
+    Submitted = ifelse(Time=="AM", 
+                       60*(hour(Timestamp)-8)+minute(Timestamp),
+                       60*(hour(Timestamp)-19)+minute(Timestamp)),
+    Duration = ifelse(Submitted-Reported<60*3 & Submitted-Reported>0, Submitted, Reported)) 
+  
+l <- lm(Duration~Critical+Intermediate+Well+Vols+Time-1, data=df)
+l.tidy <- broom::tidy(l)
+broom::glance(l)[1:6] %>% knitr::kable()
+
+```
+
+```
+--- LICENSE ---
+
+Copyright (C) 2016 Hunter Ratliff
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+```
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+In the spirit of [Reproducible Research](https://cran.r-project.org/web/views/ReproducibleResearch.html),
+below is the information About the R Session at the time it was compiled:
+
+```{r Session_info, echo=TRUE, collapse=TRUE}
+devtools::session_info()
+```

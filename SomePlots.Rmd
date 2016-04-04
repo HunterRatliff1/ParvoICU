@@ -1,0 +1,155 @@
+---
+title: "Some plots"
+author: "Hunter Ratliff, @HunterRatliff1"
+date: "February 4, 2016"
+output: ioslides_presentation
+---
+
+```{r, include=FALSE}
+require(dplyr)
+require(ggplot2)
+require(ggthemes)
+require(lubridate)
+
+Numbers <- readRDS("Datasets/Numbers.RDS")
+Numbers.melt <- readRDS("Datasets/Numbers_melt.RDS")
+```
+
+## R Markdown
+
+This is an R Markdown presentation. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document.
+
+## Density Plots - Number of Dogs
+
+```{r, echo=FALSE}
+df %>% 
+  filter(Timestamp<ymd("2016-03-01")) %>%
+  mutate(
+    Month = month(Timestamp, label = T),
+    Year  = factor(year(Timestamp))) %>% 
+  ggplot(aes(fill=Year)) + 
+  
+  geom_density(aes(x=Dogs.in.ICU), alpha=0.65) + 
+  
+  theme_fivethirtyeight() + 
+  theme(axis.title=element_text(), axis.title.y=element_text(angle=90)) +
+  scale_fill_stata() +
+  
+  labs(x="Number of Dogs") + facet_wrap("Month") 
+```
+
+## Boxplots - Number of Dogs
+
+```{r}
+df %>% 
+  filter(Timestamp<ymd("2016-03-01")) %>%
+  mutate(
+    Month = month(Timestamp, label = T),
+    Year  = factor(year(Timestamp))) %>% 
+  ggplot(aes(fill=Year)) + 
+  
+  geom_boxplot(aes(x=factor(" "), y=Dogs.in.ICU)) +
+  
+  theme_fivethirtyeight() + 
+  theme(axis.title=element_text(), axis.title.y=element_text(angle=90)) +
+  scale_fill_stata() +
+  
+  labs(x="", y="Number of Dogs") + facet_wrap("Month", nrow = 2) 
+```
+
+# Scatter Plot - Dogs in ICU vs Shift Time
+
+```{r}
+df %>% ggplot() + 
+  geom_jitter(aes(x=Shift.Time, y=Dogs.in.ICU, color=factor(year(Timestamp))), alpha=0.5) +
+  theme_fivethirtyeight() + 
+  theme(axis.title=element_text(), axis.title.y=element_text(angle=90)) +
+  scale_color_stata(name="Year") +
+  labs(x="Shift Time", y="Dogs in ICU")
+```
+
+```{r}
+df %>% ggplot() + 
+  geom_jitter(aes(x=Shift.Time * Count_Vols, y=Dogs.in.ICU, color=factor(year(Timestamp))), alpha=0.5) +
+  theme_fivethirtyeight() + 
+  theme(axis.title=element_text(), axis.title.y=element_text(angle=90)) +
+  scale_color_stata(name="Year") +
+  labs(x="ShiftTime x NumberOfVols", y="Dogs in ICU")
+```
+
+```{r}
+df %>% ggplot(aes(x=Timestamp)) + 
+  # geom_jitter(aes(y=60*Shift.Time/Dogs.in.ICU)) +
+  # geom_smooth(aes(y=60*Shift.Time/Dogs.in.ICU)) +
+  geom_smooth(aes(y=Count_Crt/Dogs.in.ICU)) +
+  theme_fivethirtyeight() + 
+  theme(axis.title=element_text(), axis.title.y=element_text(angle=90)) +
+  scale_color_stata(name="Year") +
+  labs(x="Shift Time", y="Dogs in ICU")
+```
+
+```{r}
+df %>% lm(data=., Shift.Time~Dogs.in.ICU+Count_Vols) %>% summary()
+```
+
+```{r}
+# Numbers %>%
+#   mutate(
+#     Dogs = Dogs.Crt+Dogs.Int+Dogs.Wel,
+#     pCrt = Dogs.Crt/Dogs,
+#     pInt = Dogs.Int/Dogs,
+#     pWel = Dogs.Wel/Dogs) %>%
+#   select(-Dogs.Crt, -Dogs.Int, -Dogs.Wel) %>%
+#   # group_by(week = week(Date)) %>%
+#   ggplot(aes(x=as.Date(Date))) + 
+#   geom_smooth(aes(y=pCrt))
+```
+
+```{r}
+Numbers.melt %>%
+  mutate(Year = year(Date)) %>%
+  ggplot(aes(x=yday(Date), y=All, color=Year)) + geom_smooth() #+ facet_wrap("Year")
+  
+```
+
+## How Long Does The Shift Take?
+
+```{r, echo=FALSE}
+Numbers %>%
+  ggplot(aes(x=as.Date(Date))) + 
+  geom_jitter(aes(y=Durt.Shft, color=month(Date,label = T, abbr = T)), alpha=0.5) +
+  geom_smooth(aes(y=Durt.Shft), color="red") + 
+  scale_color_discrete(name="") + #guides(color=F) +
+  guides(color=guide_legend(nrow=2)) +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b '%y") +
+  labs(title="Duration of Parvo Shifts Over Time (Hours)\nColored By Month") +
+  theme_fivethirtyeight()
+```
+
+## Slide with Plot
+
+```{r, echo=FALSE}
+Numbers.melt %>%
+  filter(Count>0) %>%
+  ggplot(aes(x=Count, y=Vols.Num*Durt.Shft)) + 
+  # geom_jitter(aes(color=Status), alpha=0.5) +
+  geom_violin(aes(fill=Status)) +
+  # geom_smooth(aes(y=Time.Hours), color="red") + 
+  labs(title="Duration of Parvo Shifts Over Time (Hours)\nColored By Month") +
+  theme_hc()
+```
+
+## Slide with Plot
+
+```{r, echo=FALSE}
+readRDS("Datasets/Numbers_melt.RDS") %>%
+  filter(year(Date.Time)==2015) %>%
+  group_by(Month=floor_date(Date.Time, "month"), Status) %>% 
+  summarise(Count=median(Count, T)) %>%
+  ggplot(aes(x=Month, y=Count, fill=Status)) + 
+  geom_bar(stat="identity", position = "dodge") + 
+  theme_fivethirtyeight()
+
+```
